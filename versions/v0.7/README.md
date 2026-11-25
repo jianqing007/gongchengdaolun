@@ -6,7 +6,7 @@
 
 **方式一：在线地址（推荐，零安装）**
 
-直接访问 GitHub Pages：<https://PLACEHOLDER.github.io/REPONAME/>
+直接访问 GitHub Pages：<https://jianqing007.github.io/gongchengdaolun/>（首次需在仓库 Settings → Pages 里开启，见运行说明）
 
 **方式二：下载 ZIP，双击即开**
 
