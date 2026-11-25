@@ -281,23 +281,66 @@
   }
 
   function updateDataFreshness() {
+    var ext = window.SnapshotExtend ? window.SnapshotExtend.status() : null;
     var last = snapshotLastDate();
-    setText(els.dataDate, '数据截至 ' + (last || '--'));
-    if (els.dataDate) {
-      els.dataDate.title = last
-        ? '快照最后一个交易日 ' + last + '；双击 start.bat 启动时会自动增量更新快照'
-        : '快照中没有可用的日线';
+    var extDate = ext && ext.state === 'done' ? ext.extendedDate : '';
+    var shown = extDate || last;
+
+    if (extDate) {
+      setText(els.dataDate, '数据截至 ' + shown + '（快照 ' + last + ' + 页面续读）');
+    } else {
+      setText(els.dataDate, '数据截至 ' + (last || '--'));
     }
-    var behind = tradingDaysAfter(last);
-    if (last && behind >= STALE_TRADING_DAYS) {
+    if (els.dataDate) {
+      if (ext && ext.state === 'mismatch') {
+        els.dataDate.title = '检测到前复权因子变化（' + ext.mismatch.join('、') +
+          '），页面续读已停用；双击 start.bat 重新生成快照后恢复';
+      } else if (extDate) {
+        els.dataDate.title = '快照最后一个交易日 ' + last + '；页面已从行情接口续读日线至 ' +
+          extDate + '（含当日未收盘数据）。快照文件本身仍以 start.bat 更新为准';
+      } else {
+        els.dataDate.title = last
+          ? '快照最后一个交易日 ' + last + '；双击 start.bat 启动时会自动增量更新快照'
+          : '快照中没有可用的日线';
+      }
+    }
+
+    // 过期横幅：以"续读后的有效日期"判断；复权变化是无条件提示（与新旧无关）
+    var effective = extDate || last;
+    var behind = tradingDaysAfter(effective);
+    var extMismatch = ext && ext.state === 'mismatch';
+    if (extMismatch) {
       els.staleBanner.classList.remove('hidden');
-      setText(els.staleText, '快照已过期 ' + behind + ' 个交易日（数据截至 ' + last +
+      setText(els.staleText, '检测到前复权因子变化，页面续读已停用（图表仍是快照数据，截至 ' +
+        last + '）；双击 start.bat 可自动重新生成快照（增量，约 10–30 秒）。');
+    } else if (effective && behind >= STALE_TRADING_DAYS) {
+      els.staleBanner.classList.remove('hidden');
+      setText(els.staleText, '快照已过期 ' + behind + ' 个交易日（数据截至 ' + effective +
         '），图表与信号仍是旧数据；双击 start.bat 可自动更新（增量，约 10–30 秒），' +
         '或手动运行 python tools/build_snapshot.py --update');
     } else {
       els.staleBanner.classList.add('hidden');
       setText(els.staleText, '');
     }
+  }
+
+  /* v0.8：页面加载后异步续读日线；成功且新增时整页重绘一次。
+     回放进行中不重绘（不打断回放），仅刷新徽标。 */
+  function runSnapshotExtension() {
+    if (!window.SnapshotExtend) return;
+    window.SnapshotExtend.run().then(function (result) {
+      renderStatus();
+      if (result.state === 'done' && result.applied > 0) {
+        if (!state.replay || !state.replay.active) {
+          renderIndices();
+          renderWatchlist();
+          renderSummary();
+          renderChart();
+          renderAlertMeta();
+          renderAnalysis();
+        }
+      }
+    }).catch(function () { /* 网络失败：保持快照现状，静默 */ });
   }
 
   function populatePoolSelect() {
@@ -2495,6 +2538,7 @@
 
     els.refreshBtn.addEventListener('click', function () {
       loadQuotes(true);
+      runSnapshotExtension(); // v0.8：手动刷新时顺带续读日线
     });
 
     els.bannerClose.addEventListener('click', function () {
@@ -2770,6 +2814,7 @@
     triggerSignalFx();
     loadQuotes(false);
     loadMinute(state.chartSymbol);
+    runSnapshotExtension(); // v0.8：首屏后异步续读日线快照
 
     window.setInterval(function () {
       if (document.visibilityState === 'visible') loadQuotes(false);

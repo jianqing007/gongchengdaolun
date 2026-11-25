@@ -5,6 +5,10 @@
   var barsCache = {};
   var negativeCounts = {};
   var cacheKey = '';
+  // v0.8 页面内续读：SnapshotExtend.applyExtension 写入的增量 K 线
+  //（[date, open, close, high, low, volume] 行，日期全部晚于快照末日）。
+  var extension = {};
+  var extensionStamp = '';
 
   function snapshotEntry(symbol) {
     var snap = window.SNAPSHOT || {};
@@ -60,7 +64,9 @@
     if (dailyCache[symbol]) return dailyCache[symbol];
     var entry = snapshotEntry(symbol);
     if (!entry || !Array.isArray(entry.bars)) return [];
-    var raw = entry.bars.map(toBar).filter(function (bar) {
+    // v0.8：快照行 + 续读行（applyExtension 已保证日期递增且晚于快照末日）
+    var extRows = extension[symbol] || [];
+    var raw = entry.bars.concat(extRows).map(toBar).filter(function (bar) {
       return bar.date && Number.isFinite(bar.open) && Number.isFinite(bar.close) &&
         Number.isFinite(bar.high) && Number.isFinite(bar.low);
     });
@@ -133,7 +139,8 @@
 
   function barsFor(symbol, period) {
     var p = period || 'day';
-    var stamp = (window.SNAPSHOT && window.SNAPSHOT.meta && window.SNAPSHOT.meta.fetchedAt) || '';
+    var stamp = ((window.SNAPSHOT && window.SNAPSHOT.meta && window.SNAPSHOT.meta.fetchedAt) || '') +
+      '#' + extensionStamp; // 续读应用后一并失效缓存
     if (cacheKey !== stamp) {
       dailyCache = {};
       barsCache = {};
@@ -166,6 +173,34 @@
     barsCache = {};
     negativeCounts = {};
     cacheKey = '';
+    extension = {};
+    extensionStamp = '';
+  }
+
+  /* v0.8：SnapshotExtend 校验通过后调用。ext: { symbol: [[date,o,c,h,l,v],...] }，
+     传入前必须已按日期升序、去重、且日期晚于该标的快照末日。 */
+  function applyExtension(ext) {
+    extension = {};
+    var lastDates = {};
+    Object.keys(window.SNAPSHOT && window.SNAPSHOT.stocks || {}).forEach(function (symbol) {
+      var bars = window.SNAPSHOT.stocks[symbol] && window.SNAPSHOT.stocks[symbol].bars;
+      if (bars && bars.length) lastDates[symbol] = String(bars[bars.length - 1][0]);
+    });
+    Object.keys(window.SNAPSHOT && window.SNAPSHOT.indices || {}).forEach(function (symbol) {
+      var bars = window.SNAPSHOT.indices[symbol] && window.SNAPSHOT.indices[symbol].bars;
+      if (bars && bars.length) lastDates[symbol] = String(bars[bars.length - 1][0]);
+    });
+    Object.keys(ext || {}).forEach(function (symbol) {
+      var rows = (ext[symbol] || []).filter(function (row) {
+        return Array.isArray(row) && row.length >= 6 &&
+          /^\d{4}-\d{2}-\d{2}$/.test(String(row[0])) &&
+          String(row[0]) > (lastDates[symbol] || '');
+      });
+      if (rows.length) extension[symbol] = rows;
+    });
+    extensionStamp = String(Date.now());
+    dailyCache = {};
+    barsCache = {};
   }
 
   function negativeCount(symbol) {
@@ -183,6 +218,7 @@
     negativeCount: negativeCount,
     periodEnd: periodEnd,
     periodKey: periodKey,
-    clearCache: clearCache
+    clearCache: clearCache,
+    applyExtension: applyExtension
   };
 })();
