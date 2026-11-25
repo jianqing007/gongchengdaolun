@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>股迹 · 自检</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .test-summary {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 14px;
+    }
+    .test-summary strong { font-size: 22px; }
+    .test-pass { color: var(--down); font-weight: 600; }
+    .test-fail { color: var(--up); font-weight: 600; }
+    .test-table td { vertical-align: top; }
+    .test-table .expected, .test-table .actual {
+      max-width: 360px;
+      color: var(--muted);
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .test-table .desc { min-width: 220px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">检</div>
+        <div>
+          <h1>股迹 <span>v0.2 自检</span></h1>
+          <p>纯函数断言：持仓计算、存储恢复、请求状态、告警冷却、分时解析</p>
+        </div>
+      </div>
+      <div class="status">
+        <a class="btn btn-ghost" href="index.html">返回看板</a>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="test-summary">
+        <span>结果</span>
+        <strong id="pass-count">--</strong>
+        <span class="muted">/ <span id="total-count">--</span> 通过</span>
+        <span id="verdict" class="badge badge-muted">运行中</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table test-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>用例</th>
+              <th>结果</th>
+              <th>期望</th>
+              <th>实际</th>
+            </tr>
+          </thead>
+          <tbody id="test-results"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>自检页只加载本地脚本，不发起行情请求；用于报告中的“修改后复测”截图。</p>
+    </footer>
+  </div>
+
+  <script src="js/data/universe.js?v=0.2.2"></script>
+  <script src="js/data/snapshot.js?v=0.2.2"></script>
+  <script src="js/core/portfolio.js?v=0.2.2"></script>
+  <script src="js/core/storage.js?v=0.2.2"></script>
+  <script src="js/core/quote-state.js?v=0.2.2"></script>
+  <script src="js/core/alerts.js?v=0.2.2"></script>
+  <script src="js/data/provider.js?v=0.2.2"></script>
+  <script src="js/ui/minute-chart.js?v=0.2.2"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      var results = [];
+      var EPS = 1e-9;
+
+      function isClose(a, b) {
+        return typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= Math.max(EPS, Math.abs(b) * 1e-9);
+      }
+
+      function equal(a, b) {
+        if (typeof a === 'number' && typeof b === 'number') return isClose(a, b);
+        return JSON.stringify(a) === JSON.stringify(b);
+      }
+
+      function test(name, fn, expected) {
+        var actual;
+        var error = null;
+        try {
+          actual = fn();
+        } catch (err) {
+          error = err;
+          actual = 'ERROR: ' + err.message;
+        }
+        results.push({
+          name: name,
+          pass: !error && equal(actual, expected),
+          expected: expected,
+          actual: actual
+        });
+      }
+
+      function closeTo(name, fn, expected) {
+        var actual;
+        var error = null;
+        try {
+          actual = fn();
+        } catch (err) {
+          error = err;
+          actual = 'ERROR: ' + err.message;
+        }
+        results.push({
+          name: name,
+          pass: !error && isClose(actual, expected),
+          expected: expected,
+          actual: actual
+        });
+      }
+
+      function show(value) {
+        if (typeof value === 'string' && value.indexOf('ERROR:') === 0) return value;
+        return JSON.stringify(value);
+      }
+
+      var quoteA = { price: 1600, prevClose: 1580 };
+      var holdingA = { symbol: '600519', shares: 100, cost: 1500 };
+
+      test('金额转分：0.1 + 0.2 不产生浮点尾差', function () {
+        return Portfolio.toCents(0.1 + 0.2);
+      }, 30);
+
+      test('金额转分：1500.01 元', function () {
+        return Portfolio.toCents('1500.01');
+      }, 150001);
+
+      test('单只持仓：市值（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).marketValue;
+      }, 16000000);
+
+      test('单只持仓：成本合计（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).costTotal;
+      }, 15000000);
+
+      test('单只持仓：浮动盈亏（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).pnl;
+      }, 1000000);
+
+      test('单只持仓：今日盈亏（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).dayPnl;
+      }, 200000);
+
+      closeTo('单只持仓：盈亏比例 = 10000 / 150000', function () {
+        return Portfolio.computePosition(holdingA, quoteA).pnlPct;
+      }, 1 / 15);
+
+      test('行情缺失：市值与盈亏为 null，不出现 NaN', function () {
+        var pos = Portfolio.computePosition(holdingA, null);
+        return [pos.marketValue, pos.pnl, pos.dayPnl];
+      }, [null, null, null]);
+
+      test('组合合计：市值 / 成本 / 盈亏 / 今日盈亏（分）', function () {
+        var result = Portfolio.computePortfolio([
+          { symbol: '600519', shares: 100, cost: 1500 },
+          { symbol: '300750', shares: 200, cost: 180 }
+        ], {
+          '600519': { price: 1600, prevClose: 1580 },
+          '300750': { price: 200, prevClose: 190 }
+        });
+        return [result.totals.marketValue, result.totals.costTotal, result.totals.pnl, result.totals.dayPnl];
+      }, [20000000, 18600000, 1400000, 400000]);
+
+      closeTo('组合权重合计为 1', function () {
+        var result = Portfolio.computePortfolio([
+          { symbol: '600519', shares: 100, cost: 1500 },
+          { symbol: '300750', shares: 200, cost: 180 }
+        ], {
+          '600519': { price: 1600, prevClose: 1580 },
+          '300750': { price: 200, prevClose: 190 }
+        });
+        return result.positions[0].weight + result.positions[1].weight;
+      }, 1);
+
+      test('空持仓：数量为 0，合计为 0', function () {
+        var result = Portfolio.computePortfolio([], {});
+        return [result.totals.count, result.totals.marketValue, result.totals.pnl];
+      }, [0, 0, 0]);
+
+      test('校验：合法输入通过', function () {
+        return Portfolio.validateHolding({ symbol: '600519', shares: '100', cost: '1500' }, []).ok;
+      }, true);
+
+      test('校验：重复股票被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '100', cost: '1500' }, [holdingA]);
+        return [result.ok, result.errors.symbol];
+      }, [false, '该股票已在持仓中']);
+
+      test('校验：编辑同一只股票允许保存', function () {
+        return Portfolio.validateHolding({ symbol: '600519', shares: '200', cost: '1400' }, [holdingA], '600519').ok;
+      }, true);
+
+      test('校验：股数为 0 被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '0', cost: '1500' }, []);
+        return [result.ok, result.errors.shares];
+      }, [false, '股数必须是大于 0 的整数']);
+
+      test('校验：股数不是整数被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '1.5', cost: '1500' }, []);
+        return [result.ok, result.errors.shares];
+      }, [false, '股数必须是大于 0 的整数']);
+
+      test('校验：负成本被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '100', cost: '-1' }, []);
+        return [result.ok, result.errors.cost];
+      }, [false, '成本价必须大于 0']);
+
+      test('校验：未知股票被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '999999', shares: '100', cost: '10' }, []);
+        return [result.ok, result.errors.symbol];
+      }, [false, '请选择自选股列表中的股票']);
+
+      var sampleText =
+        'v_sh600519="1~贵州茅台~600519~1354.00~1330.75~1349.99~42992~24647~18345~1353.77~1~1352.00~2~1351.06~1~1351.00~2~1350.99~1~1354.00~27~1354.01~1~1354.02~1~1354.18~1~1354.40~1~~20261029161457~23.25~1.75~1356.00~1330.01~1354.00/42992/5797980334~42992~579798~0.34~20.79~~1356.00~1330.01~1.95~16926.10~16926.10~6.74~1463.83~1197.68~0.98~-24~1348.61~19.01~2";\n' +
+        'v_sz000858="51~五 粮 液~000858~72.28~72.40~71.25~357321~181939~175382~72.27~1~72.26~13~72.24~7~72.20~32~72.18~110~72.28~132~72.29~44~72.30~494~72.31~22~72.32~17~~20261029161445~-0.12~-0.17~72.28~70.80~72.28/357321/2551278531~357321~255128~0.92~23.02~~72.28~70.80~2.04~2805.56~2805.63~2.37~79.64~65.16~0.87~-546~71.40~21.67~31.33~~~0.24~255127.8531~200.9384~278~   A~GP-A~-30.07~0.77~7.13~10.29~7.27~117.34~67.94~1.37~2.76~-3.84~3881513391~3881608005~-62.61~-26.58~3881513391~~~-36.41~0.58~~CNY~0~~72.33~-378~";';
+
+      test('行情解析：贵州茅台价格与昨收', function () {
+        var quotes = QuoteProvider.parseQuoteText(sampleText);
+        return [quotes['600519'].price, quotes['600519'].prevClose, quotes['600519'].pct];
+      }, [1354, 1330.75, 1.75]);
+
+      test('行情解析：五粮液量比与换手率', function () {
+        var quotes = QuoteProvider.parseQuoteText(sampleText);
+        return [quotes['000858'].volumeRatio, quotes['000858'].turnover];
+      }, [0.87, 0.92]);
+
+      test('行情解析：价格为 "-" 时返回 null', function () {
+        var text = 'v_sh600519="1~贵州茅台~600519~-~1330.75~1349.99~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~20261029161457~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0";';
+        var quotes = QuoteProvider.parseQuoteText(text);
+        return quotes['600519'].price;
+      }, null);
+
+      test('行情 URL：10 只股票合并为一个请求', function () {
+        var url = QuoteProvider.buildQuoteUrl([
+          { tx: 'sh600519' },
+          { tx: 'sz000858' }
+        ]);
+        return url;
+      }, 'https://qt.gtimg.cn/q=sh600519,sz000858');
+
+      test('快照兜底：贵州茅台返回最新收盘价', function () {
+        var quote = QuoteProvider.quoteFromSnapshot('600519');
+        var bars = SNAPSHOT.stocks['600519'].bars;
+        return [quote.price, quote.prevClose];
+      }, [
+        SNAPSHOT.stocks['600519'].bars[SNAPSHOT.stocks['600519'].bars.length - 1][2],
+        SNAPSHOT.stocks['600519'].bars[SNAPSHOT.stocks['600519'].bars.length - 2][2]
+      ]);
+
+      function FakeStorage() {
+        this.data = {};
+      }
+      FakeStorage.prototype.getItem = function (key) {
+        return Object.prototype.hasOwnProperty.call(this.data, key) ? this.data[key] : null;
+      };
+      FakeStorage.prototype.setItem = function (key, value) {
+        this.data[key] = String(value);
+      };
+      FakeStorage.prototype.removeItem = function (key) {
+        delete this.data[key];
+      };
+
+      test('存储：合法 v2 结构被识别', function () {
+        var raw = JSON.stringify({
+          version: 2,
+          holdings: [{ symbol: '600519', shares: 100, cost: 1500 }]
+        });
+        var decoded = HoldingStore.decode(raw);
+        return [decoded.status, decoded.holdings.length];
+      }, ['ok', 1]);
+
+      test('存储：重复和非法条目被过滤', function () {
+        var result = HoldingStore.normalizeList([
+          { symbol: '600519', shares: 100, cost: 1500 },
+          { symbol: '600519', shares: 200, cost: 1500 },
+          { symbol: '999999', shares: 100, cost: 10 },
+          { symbol: '300750', shares: 0, cost: 180 }
+        ]);
+        return [result.holdings.length, result.rejected];
+      }, [1, 3]);
+
+      test('存储：非法 JSON 备份原文并恢复示例', function () {
+        var storage = new FakeStorage();
+        storage.setItem(HoldingStore.KEY, '{"broken":');
+        var loaded = HoldingStore.read(storage, function () {
+          return [{ symbol: '600519', shares: 100, cost: 1500 }];
+        });
+        return [
+          loaded.status,
+          loaded.holdings.length,
+          !!loaded.backupKey,
+          storage.getItem(loaded.backupKey),
+          loaded.shouldPersist
+        ];
+      }, ['corrupt', 1, true, '{"broken":', true]);
+
+      test('存储：v1 数组迁移并标记保存', function () {
+        var storage = new FakeStorage();
+        storage.setItem(HoldingStore.LEGACY_KEY, JSON.stringify([
+          { symbol: '300750', shares: 200, cost: 180 }
+        ]));
+        var loaded = HoldingStore.read(storage, function () { return []; });
+        return [loaded.status, loaded.holdings.length, loaded.shouldPersist];
+      }, ['legacy', 1, true]);
+
+      test('存储：空持仓数组不被当成损坏', function () {
+        var storage = new FakeStorage();
+        storage.setItem(HoldingStore.KEY, JSON.stringify({ version: 2, holdings: [] }));
+        var loaded = HoldingStore.read(storage, function () { return [{ symbol: '600519', shares: 1, cost: 1 }]; });
+        return [loaded.status, loaded.holdings.length, loaded.shouldPersist];
+      }, ['ok', 0, false]);
+
+      test('存储：保存写入 v2 包装结构', function () {
+        var storage = new FakeStorage();
+        var result = HoldingStore.save(storage, [{ symbol: '600519', shares: 100, cost: 1500 }]);
+        var saved = JSON.parse(storage.getItem(HoldingStore.KEY));
+        return [result.ok, saved.version, saved.holdings.length];
+      }, [true, 2, 1]);
+
+      test('请求退避：重试间隔 3/6/12/30 秒', function () {
+        return [
+          QuoteState.backoffDelay(1),
+          QuoteState.backoffDelay(2),
+          QuoteState.backoffDelay(3),
+          QuoteState.backoffDelay(4)
+        ];
+      }, [3000, 6000, 12000, 30000]);
+
+      test('请求序：旧响应不会被当作最新响应', function () {
+        return [QuoteState.isLatest(3, 3), QuoteState.isLatest(3, 2)];
+      }, [true, false]);
+
+      test('行情时间：取全部标的中的最新时间', function () {
+        var quotes = {
+          '600519': { price: 10, time: 100 },
+          '300750': { price: 20, time: 300 }
+        };
+        return QuoteState.latestQuoteTime(quotes, [UNIVERSE[0], UNIVERSE[2]]);
+      }, 300);
+
+      test('缺失行情：按股票对象返回缺失数量', function () {
+        var missing = QuoteState.missingItems(UNIVERSE, {
+          '600519': { price: 10 }
+        });
+        return missing.length;
+      }, 9);
+
+      test('告警：涨幅达到 3% 触发 pct-up', function () {
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': { symbol: '600519', name: '贵州茅台', price: 10.3, pct: 3.2, prevClose: 9.98, volumeRatio: 1, time: 1 }
+        }, [stock], null, 1000);
+        return events.map(function (event) { return event.id; });
+      }, ['600519:pct-up']);
+
+      test('告警：量比达到 2 触发 volume', function () {
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': { symbol: '600519', name: '贵州茅台', price: 10, pct: 0, prevClose: 10, volumeRatio: 2.5, time: 1 }
+        }, [stock], null, 1000);
+        return events.map(function (event) { return event.id; });
+      }, ['600519:volume']);
+
+      test('告警：平盘且缩量不误报', function () {
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': { symbol: '600519', name: '贵州茅台', price: 10, pct: 0, prevClose: 10, volumeRatio: 1, time: 1 }
+        }, [stock], null, 1000);
+        return events.length;
+      }, 0);
+
+      test('告警：30 分钟冷却窗口生效', function () {
+        var events = [{ id: 'x' }];
+        var first = AlertEngine.applyCooldown(events, {}, 1000, 30000).events.length;
+        var second = AlertEngine.applyCooldown(events, { x: 1000 }, 20000, 30000).events.length;
+        var third = AlertEngine.applyCooldown(events, { x: 1000 }, 31001, 30000).events.length;
+        return [first, second, third];
+      }, [1, 0, 1]);
+
+      test('告警：20 日均线突破与 20 日新高可同时识别', function () {
+        var bars = [];
+        for (var i = 1; i <= 20; i += 1) {
+          bars.push(['2026-09-' + String(i).padStart(2, '0'), 10, 10, 10.5, 9.5, 1000]);
+        }
+        var snapshot = { stocks: { '600519': { bars: bars } } };
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': {
+            symbol: '600519',
+            name: '贵州茅台',
+            price: 11,
+            prevClose: 9.9,
+            pct: 0,
+            volumeRatio: 1,
+            time: Date.parse('2026-10-30T10:00:00+08:00')
+          }
+        }, [stock], snapshot, 2000);
+        return events.map(function (event) { return event.id; });
+      }, ['600519:ma-up', '600519:high']);
+
+      test('分时解析：过滤午休并保留首尾价格', function () {
+        var payload = {
+          data: {
+            sh600519: {
+              data: {
+                date: '20261030',
+                data: [
+                  '0930 1363.00 1 1',
+                  '1130 1380.00 2 2',
+                  '1200 1.00 0 0',
+                  '1300 1381.00 3 3',
+                  '1500 1392.05 4 4'
+                ]
+              }
+            }
+          }
+        };
+        var series = QuoteProvider.parseMinutePayload(payload, '600519');
+        return [series.date, series.points.length, series.points[0].price, series.points[series.points.length - 1].price];
+      }, ['20261030', 4, 1363, 1392.05]);
+
+      test('分时横轴：09:30/11:30/13:00/15:00 的位置', function () {
+        return [
+          IntradayChart.sessionPosition(930),
+          IntradayChart.sessionPosition(1130),
+          IntradayChart.sessionPosition(1300),
+          IntradayChart.sessionPosition(1500)
+        ];
+      }, [0, 120, 121, 241]);
+
+      var passCount = results.filter(function (item) { return item.pass; }).length;
+      document.getElementById('pass-count').textContent = String(passCount);
+      document.getElementById('total-count').textContent = String(results.length);
+      var verdict = document.getElementById('verdict');
+      verdict.textContent = passCount === results.length ? '全部通过' : '存在失败';
+      verdict.className = 'badge ' + (passCount === results.length ? 'badge-live' : 'badge-warn');
+
+      document.getElementById('test-results').innerHTML = results.map(function (item, index) {
+        return '<tr>' +
+          '<td>' + (index + 1) + '</td>' +
+          '<td class="desc">' + item.name + '</td>' +
+          '<td class="' + (item.pass ? 'test-pass' : 'test-fail') + '">' + (item.pass ? '通过' : '失败') + '</td>' +
+          '<td class="expected">' + show(item.expected) + '</td>' +
+          '<td class="actual">' + show(item.actual) + '</td>' +
+        '</tr>';
+      }).join('');
+    })();
+  </script>
+</body>
+</html>

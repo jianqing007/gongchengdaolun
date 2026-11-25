@@ -1,0 +1,8 @@
+# 文本文件统一按 LF 入库、按平台检出
+* text=auto
+
+# Windows 批处理必须 CRLF，否则 cmd 解析可能异常
+*.bat text eol=crlf
+
+# 快照是单行大文件，标记为文本即可（UTF-8）
+js/data/snapshot.js -diff

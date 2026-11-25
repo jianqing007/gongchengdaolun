@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>股迹 · 自检</title>
+  <link rel="stylesheet" href="css/style.css">
+  <style>
+    .test-summary {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line-soft);
+      font-size: 14px;
+    }
+    .test-summary strong { font-size: 22px; }
+    .test-pass { color: var(--down); font-weight: 600; }
+    .test-fail { color: var(--up); font-weight: 600; }
+    .test-table td { vertical-align: top; }
+    .test-table .expected, .test-table .actual {
+      max-width: 360px;
+      color: var(--muted);
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .test-table .desc { min-width: 220px; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">检</div>
+        <div>
+          <h1>股迹 <span>v0.4 自检</span></h1>
+          <p>纯函数断言：持仓计算、存储恢复、告警冷却、MACD 交叉、池子配置、数据新鲜度、指数闸门、池子总览、技术指标、组合风险、预测回测</p>
+        </div>
+      </div>
+      <div class="status">
+        <a class="btn btn-ghost" href="index.html">返回看板</a>
+      </div>
+    </header>
+
+    <section class="panel">
+      <div class="test-summary">
+        <span>结果</span>
+        <strong id="pass-count">--</strong>
+        <span class="muted">/ <span id="total-count">--</span> 通过</span>
+        <span id="verdict" class="badge badge-muted">运行中</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table test-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>用例</th>
+              <th>结果</th>
+              <th>期望</th>
+              <th>实际</th>
+            </tr>
+          </thead>
+          <tbody id="test-results"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>自检页只加载本地脚本，不发起行情请求；用于报告中的“修改后复测”截图。</p>
+    </footer>
+  </div>
+
+  <script src="js/data/universe.js?v=0.6.0"></script>
+  <script src="js/data/snapshot.js?v=0.6.0"></script>
+  <script src="js/core/portfolio.js?v=0.6.0"></script>
+  <script src="js/core/storage.js?v=0.6.0"></script>
+  <script src="js/core/quote-state.js?v=0.6.0"></script>
+  <script src="js/core/freshness.js?v=0.6.0"></script>
+  <script src="js/core/alerts.js?v=0.6.0"></script>
+  <script src="js/core/indicators.js?v=0.6.0"></script>
+  <script src="js/core/signals.js?v=0.6.0"></script>
+  <script src="js/core/gates.js?v=0.6.0"></script>
+  <script src="js/core/overview.js?v=0.6.0"></script>
+  <script src="js/core/risk.js?v=0.6.0"></script>
+  <script src="js/core/forecast.js?v=0.6.0"></script>
+  <script src="js/data/history.js?v=0.6.0"></script>
+  <script src="js/data/provider.js?v=0.6.0"></script>
+  <script src="js/ui/minute-chart.js?v=0.6.0"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      window.setPoolGroup('course');
+
+      var results = [];
+      var EPS = 1e-9;
+
+      function isClose(a, b) {
+        return typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) <= Math.max(EPS, Math.abs(b) * 1e-9);
+      }
+
+      function equal(a, b) {
+        if (typeof a === 'number' && typeof b === 'number') return isClose(a, b);
+        return JSON.stringify(a) === JSON.stringify(b);
+      }
+
+      function test(name, fn, expected) {
+        var actual;
+        var error = null;
+        try {
+          actual = fn();
+        } catch (err) {
+          error = err;
+          actual = 'ERROR: ' + err.message;
+        }
+        results.push({
+          name: name,
+          pass: !error && equal(actual, expected),
+          expected: expected,
+          actual: actual
+        });
+      }
+
+      function closeTo(name, fn, expected) {
+        var actual;
+        var error = null;
+        try {
+          actual = fn();
+        } catch (err) {
+          error = err;
+          actual = 'ERROR: ' + err.message;
+        }
+        results.push({
+          name: name,
+          pass: !error && isClose(actual, expected),
+          expected: expected,
+          actual: actual
+        });
+      }
+
+      function show(value) {
+        if (typeof value === 'string' && value.indexOf('ERROR:') === 0) return value;
+        return JSON.stringify(value);
+      }
+
+      var quoteA = { price: 1600, prevClose: 1580 };
+      var holdingA = { symbol: '600519', shares: 100, cost: 1500 };
+
+      test('金额转分：0.1 + 0.2 不产生浮点尾差', function () {
+        return Portfolio.toCents(0.1 + 0.2);
+      }, 30);
+
+      test('金额转分：1500.01 元', function () {
+        return Portfolio.toCents('1500.01');
+      }, 150001);
+
+      test('单只持仓：市值（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).marketValue;
+      }, 16000000);
+
+      test('单只持仓：成本合计（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).costTotal;
+      }, 15000000);
+
+      test('单只持仓：浮动盈亏（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).pnl;
+      }, 1000000);
+
+      test('单只持仓：今日盈亏（分）', function () {
+        return Portfolio.computePosition(holdingA, quoteA).dayPnl;
+      }, 200000);
+
+      closeTo('单只持仓：盈亏比例 = 10000 / 150000', function () {
+        return Portfolio.computePosition(holdingA, quoteA).pnlPct;
+      }, 1 / 15);
+
+      test('行情缺失：市值与盈亏为 null，不出现 NaN', function () {
+        var pos = Portfolio.computePosition(holdingA, null);
+        return [pos.marketValue, pos.pnl, pos.dayPnl];
+      }, [null, null, null]);
+
+      test('组合合计：市值 / 成本 / 盈亏 / 今日盈亏（分）', function () {
+        var result = Portfolio.computePortfolio([
+          { symbol: '600519', shares: 100, cost: 1500 },
+          { symbol: '300750', shares: 200, cost: 180 }
+        ], {
+          '600519': { price: 1600, prevClose: 1580 },
+          '300750': { price: 200, prevClose: 190 }
+        });
+        return [result.totals.marketValue, result.totals.costTotal, result.totals.pnl, result.totals.dayPnl];
+      }, [20000000, 18600000, 1400000, 400000]);
+
+      closeTo('组合权重合计为 1', function () {
+        var result = Portfolio.computePortfolio([
+          { symbol: '600519', shares: 100, cost: 1500 },
+          { symbol: '300750', shares: 200, cost: 180 }
+        ], {
+          '600519': { price: 1600, prevClose: 1580 },
+          '300750': { price: 200, prevClose: 190 }
+        });
+        return result.positions[0].weight + result.positions[1].weight;
+      }, 1);
+
+      test('空持仓：数量为 0，合计为 0', function () {
+        var result = Portfolio.computePortfolio([], {});
+        return [result.totals.count, result.totals.marketValue, result.totals.pnl];
+      }, [0, 0, 0]);
+
+      test('校验：合法输入通过', function () {
+        return Portfolio.validateHolding({ symbol: '600519', shares: '100', cost: '1500' }, []).ok;
+      }, true);
+
+      test('校验：重复股票被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '100', cost: '1500' }, [holdingA]);
+        return [result.ok, result.errors.symbol];
+      }, [false, '该股票已持仓，请用“加仓”或“修正”']);
+
+      test('加仓：100 股 @1500 + 100 股 @1400 = 200 股 @1450', function () {
+        var merged = Portfolio.mergeHolding(holdingA, '100', '1400');
+        return [merged.shares, merged.cost];
+      }, [200, 1450]);
+
+      test('加仓：合并后总成本与零盈亏', function () {
+        var merged = Portfolio.mergeHolding(holdingA, '100', '1400');
+        var pos = Portfolio.computePosition(merged, { price: 1450, prevClose: 1450 });
+        return [pos.costTotal, pos.marketValue, pos.pnl];
+      }, [29000000, 29000000, 0]);
+
+      test('加仓：另一组价格按加权平均合并', function () {
+        var merged = Portfolio.mergeHolding(holdingA, '100', '1600');
+        return [merged.shares, merged.cost];
+      }, [200, 1550]);
+
+      test('减仓：保留原每股成本', function () {
+        var reduced = Portfolio.reduceHolding(holdingA, '40');
+        return [reduced.shares, reduced.cost];
+      }, [60, 1500]);
+
+      test('减仓：全部卖出返回 null', function () {
+        return Portfolio.reduceHolding(holdingA, '100');
+      }, null);
+
+      test('校验：加仓股数和成本', function () {
+        var good = Portfolio.validateIncrease({ shares: '100', cost: '1400' }, holdingA);
+        var bad = Portfolio.validateIncrease({ shares: '0', cost: '-1' }, holdingA);
+        return [good.ok, bad.ok, bad.errors.shares, bad.errors.cost];
+      }, [true, false, '新增股数必须是大于 0 的整数', '本次成本价必须大于 0']);
+
+      test('校验：减仓不能超过现有股数', function () {
+        var bad = Portfolio.validateReduce({ shares: '101' }, holdingA);
+        var good = Portfolio.validateReduce({ shares: '50' }, holdingA);
+        return [bad.ok, bad.errors.shares, good.ok];
+      }, [false, '减持股数不能超过现有 100 股', true]);
+
+      test('校验：编辑同一只股票允许保存', function () {
+        return Portfolio.validateHolding({ symbol: '600519', shares: '200', cost: '1400' }, [holdingA], '600519').ok;
+      }, true);
+
+      test('校验：股数为 0 被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '0', cost: '1500' }, []);
+        return [result.ok, result.errors.shares];
+      }, [false, '股数必须是大于 0 的整数']);
+
+      test('校验：股数不是整数被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '1.5', cost: '1500' }, []);
+        return [result.ok, result.errors.shares];
+      }, [false, '股数必须是大于 0 的整数']);
+
+      test('校验：负成本被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '600519', shares: '100', cost: '-1' }, []);
+        return [result.ok, result.errors.cost];
+      }, [false, '成本价必须大于 0']);
+
+      test('校验：未知股票被拒绝', function () {
+        var result = Portfolio.validateHolding({ symbol: '999999', shares: '100', cost: '10' }, []);
+        return [result.ok, result.errors.symbol];
+      }, [false, '请选择自选股列表中的股票']);
+
+      var sampleText =
+        'v_sh600519="1~贵州茅台~600519~1354.00~1330.75~1349.99~42992~24647~18345~1353.77~1~1352.00~2~1351.06~1~1351.00~2~1350.99~1~1354.00~27~1354.01~1~1354.02~1~1354.18~1~1354.40~1~~20261029161457~23.25~1.75~1356.00~1330.01~1354.00/42992/5797980334~42992~579798~0.34~20.79~~1356.00~1330.01~1.95~16926.10~16926.10~6.74~1463.83~1197.68~0.98~-24~1348.61~19.01~2";\n' +
+        'v_sz000858="51~五 粮 液~000858~72.28~72.40~71.25~357321~181939~175382~72.27~1~72.26~13~72.24~7~72.20~32~72.18~110~72.28~132~72.29~44~72.30~494~72.31~22~72.32~17~~20261029161445~-0.12~-0.17~72.28~70.80~72.28/357321/2551278531~357321~255128~0.92~23.02~~72.28~70.80~2.04~2805.56~2805.63~2.37~79.64~65.16~0.87~-546~71.40~21.67~31.33~~~0.24~255127.8531~200.9384~278~   A~GP-A~-30.07~0.77~7.13~10.29~7.27~117.34~67.94~1.37~2.76~-3.84~3881513391~3881608005~-62.61~-26.58~3881513391~~~-36.41~0.58~~CNY~0~~72.33~-378~";';
+
+      test('行情解析：贵州茅台价格与昨收', function () {
+        var quotes = QuoteProvider.parseQuoteText(sampleText);
+        return [quotes['600519'].price, quotes['600519'].prevClose, quotes['600519'].pct];
+      }, [1354, 1330.75, 1.75]);
+
+      test('行情解析：五粮液量比与换手率', function () {
+        var quotes = QuoteProvider.parseQuoteText(sampleText);
+        return [quotes['000858'].volumeRatio, quotes['000858'].turnover];
+      }, [0.87, 0.92]);
+
+      test('行情解析：价格为 "-" 时返回 null', function () {
+        var text = 'v_sh600519="1~贵州茅台~600519~-~1330.75~1349.99~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~20261029161457~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0";';
+        var quotes = QuoteProvider.parseQuoteText(text);
+        return quotes['600519'].price;
+      }, null);
+
+      test('行情 URL：10 只股票合并为一个请求', function () {
+        var url = QuoteProvider.buildQuoteUrl([
+          { tx: 'sh600519' },
+          { tx: 'sz000858' }
+        ]);
+        return url;
+      }, 'https://qt.gtimg.cn/q=sh600519,sz000858');
+
+      test('快照兜底：贵州茅台返回最新收盘价', function () {
+        var quote = QuoteProvider.quoteFromSnapshot('600519');
+        var bars = SNAPSHOT.stocks['600519'].bars;
+        return [quote.price, quote.prevClose];
+      }, [
+        SNAPSHOT.stocks['600519'].bars[SNAPSHOT.stocks['600519'].bars.length - 1][2],
+        SNAPSHOT.stocks['600519'].bars[SNAPSHOT.stocks['600519'].bars.length - 2][2]
+      ]);
+
+      function FakeStorage() {
+        this.data = {};
+      }
+      FakeStorage.prototype.getItem = function (key) {
+        return Object.prototype.hasOwnProperty.call(this.data, key) ? this.data[key] : null;
+      };
+      FakeStorage.prototype.setItem = function (key, value) {
+        this.data[key] = String(value);
+      };
+      FakeStorage.prototype.removeItem = function (key) {
+        delete this.data[key];
+      };
+
+      test('存储：合法 v2 结构被识别', function () {
+        var raw = JSON.stringify({
+          version: 2,
+          holdings: [{ symbol: '600519', shares: 100, cost: 1500 }]
+        });
+        var decoded = HoldingStore.decode(raw);
+        return [decoded.status, decoded.holdings.length];
+      }, ['ok', 1]);
+
+      test('存储：重复和非法条目被过滤', function () {
+        var result = HoldingStore.normalizeList([
+          { symbol: '600519', shares: 100, cost: 1500 },
+          { symbol: '600519', shares: 200, cost: 1500 },
+          { symbol: '999999', shares: 100, cost: 10 },
+          { symbol: '300750', shares: 0, cost: 180 }
+        ]);
+        return [result.holdings.length, result.rejected];
+      }, [1, 3]);
+
+      test('存储：非法 JSON 备份原文并恢复示例', function () {
+        var storage = new FakeStorage();
+        storage.setItem(HoldingStore.KEY, '{"broken":');
+        var loaded = HoldingStore.read(storage, function () {
+          return [{ symbol: '600519', shares: 100, cost: 1500 }];
+        });
+        return [
+          loaded.status,
+          loaded.holdings.length,
+          !!loaded.backupKey,
+          storage.getItem(loaded.backupKey),
+          loaded.shouldPersist
+        ];
+      }, ['corrupt', 1, true, '{"broken":', true]);
+
+      test('存储：v1 数组迁移并标记保存', function () {
+        var storage = new FakeStorage();
+        storage.setItem(HoldingStore.LEGACY_KEY, JSON.stringify([
+          { symbol: '300750', shares: 200, cost: 180 }
+        ]));
+        var loaded = HoldingStore.read(storage, function () { return []; });
+        return [loaded.status, loaded.holdings.length, loaded.shouldPersist];
+      }, ['legacy', 1, true]);
+
+      test('存储：空持仓数组不被当成损坏', function () {
+        var storage = new FakeStorage();
+        storage.setItem(HoldingStore.KEY, JSON.stringify({ version: 2, holdings: [] }));
+        var loaded = HoldingStore.read(storage, function () { return [{ symbol: '600519', shares: 1, cost: 1 }]; });
+        return [loaded.status, loaded.holdings.length, loaded.shouldPersist];
+      }, ['ok', 0, false]);
+
+      test('存储：保存写入 v2 包装结构', function () {
+        var storage = new FakeStorage();
+        var result = HoldingStore.save(storage, [{ symbol: '600519', shares: 100, cost: 1500 }]);
+        var saved = JSON.parse(storage.getItem(HoldingStore.KEY));
+        return [result.ok, saved.version, saved.holdings.length];
+      }, [true, 2, 1]);
+
+      test('请求退避：重试间隔 3/6/12/30 秒', function () {
+        return [
+          QuoteState.backoffDelay(1),
+          QuoteState.backoffDelay(2),
+          QuoteState.backoffDelay(3),
+          QuoteState.backoffDelay(4)
+        ];
+      }, [3000, 6000, 12000, 30000]);
+
+      test('请求序：旧响应不会被当作最新响应', function () {
+        return [QuoteState.isLatest(3, 3), QuoteState.isLatest(3, 2)];
+      }, [true, false]);
+
+      test('行情时间：取全部标的中的最新时间', function () {
+        var quotes = {
+          '600519': { price: 10, time: 100 },
+          '300750': { price: 20, time: 300 }
+        };
+        return QuoteState.latestQuoteTime(quotes, [UNIVERSE[0], UNIVERSE[2]]);
+      }, 300);
+
+      test('缺失行情：按股票对象返回缺失数量', function () {
+        var missing = QuoteState.missingItems(UNIVERSE, {
+          '600519': { price: 10 }
+        });
+        return missing.length;
+      }, 9);
+
+      test('告警：涨幅达到 3% 触发 pct-up', function () {
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': { symbol: '600519', name: '贵州茅台', price: 10.3, pct: 3.2, prevClose: 9.98, volumeRatio: 1, time: 1 }
+        }, [stock], null, 1000);
+        return events.map(function (event) { return event.id; });
+      }, ['600519:pct-up']);
+
+      test('告警：量比达到 2 触发 volume', function () {
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': { symbol: '600519', name: '贵州茅台', price: 10, pct: 0, prevClose: 10, volumeRatio: 2.5, time: 1 }
+        }, [stock], null, 1000);
+        return events.map(function (event) { return event.id; });
+      }, ['600519:volume']);
+
+      test('告警：平盘且缩量不误报', function () {
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': { symbol: '600519', name: '贵州茅台', price: 10, pct: 0, prevClose: 10, volumeRatio: 1, time: 1 }
+        }, [stock], null, 1000);
+        return events.length;
+      }, 0);
+
+      test('告警：30 分钟冷却窗口生效', function () {
+        var events = [{ id: 'x' }];
+        var first = AlertEngine.applyCooldown(events, {}, 1000, 30000).events.length;
+        var second = AlertEngine.applyCooldown(events, { x: 1000 }, 20000, 30000).events.length;
+        var third = AlertEngine.applyCooldown(events, { x: 1000 }, 31001, 30000).events.length;
+        return [first, second, third];
+      }, [1, 0, 1]);
+
+      test('告警：20 日均线突破与 20 日新高可同时识别', function () {
+        var bars = [];
+        for (var i = 1; i <= 20; i += 1) {
+          bars.push(['2026-09-' + String(i).padStart(2, '0'), 10, 10, 10.5, 9.5, 1000]);
+        }
+        var snapshot = { stocks: { '600519': { bars: bars } } };
+        var stock = UNIVERSE_BY_SYMBOL['600519'];
+        var events = AlertEngine.evaluateAll({
+          '600519': {
+            symbol: '600519',
+            name: '贵州茅台',
+            price: 11,
+            prevClose: 9.9,
+            pct: 0,
+            volumeRatio: 1,
+            time: Date.parse('2026-10-30T10:00:00+08:00')
+          }
+        }, [stock], snapshot, 2000);
+        return events.map(function (event) { return event.id; });
+      }, ['600519:ma-up', '600519:high']);
+
+      test('分时解析：过滤午休并保留首尾价格', function () {
+        var payload = {
+          data: {
+            sh600519: {
+              data: {
+                date: '20261030',
+                data: [
+                  '0930 1363.00 1 1',
+                  '1130 1380.00 2 2',
+                  '1200 1.00 0 0',
+                  '1300 1381.00 3 3',
+                  '1500 1392.05 4 4'
+                ]
+              }
+            }
+          }
+        };
+        var series = QuoteProvider.parseMinutePayload(payload, '600519');
+        return [series.date, series.points.length, series.points[0].price, series.points[series.points.length - 1].price];
+      }, ['20261030', 4, 1363, 1392.05]);
+
+      test('分时横轴：09:30/11:30/13:00/15:00 的位置', function () {
+        return [
+          IntradayChart.sessionPosition(930),
+          IntradayChart.sessionPosition(1130),
+          IntradayChart.sessionPosition(1300),
+          IntradayChart.sessionPosition(1500)
+        ];
+      }, [0, 120, 121, 241]);
+
+      function round(value, digits) {
+        var factor = Math.pow(10, digits == null ? 6 : digits);
+        return Math.round(Number(value) * factor) / factor;
+      }
+
+      test('指标 SMA：3 日窗口与预热', function () {
+        return Indicators.sma([1, 2, 3, 4, 5], 3);
+      }, [null, null, 2, 3, 4]);
+
+      test('指标 SMA：窗口含缺失值返回 null', function () {
+        return Indicators.sma([1, 2, null, 4, 5], 3);
+      }, [null, null, null, null, null]);
+
+      test('指标 EMA：alpha=0.5 的递推值', function () {
+        return Indicators.ema([1, 2, 3, 4], 3);
+      }, [1, 1.5, 2.25, 3.125]);
+
+      test('指标 MACD：常数序列的 DIF/DEA/柱为 0', function () {
+        var result = Indicators.macd(new Array(40).fill(10));
+        return [result.dif[25], result.dea[33], result.hist[33]];
+      }, [0, 0, 0]);
+
+      test('指标 MACD：预热期返回 null', function () {
+        var result = Indicators.macd(new Array(40).fill(10));
+        return [result.dif[24], result.dea[32], result.hist[32]];
+      }, [null, null, null]);
+
+      test('指标 MACD：柱 = 2 × (DIF - DEA)', function () {
+        var closes = Array.from({ length: 40 }, function (_, index) { return index + 1; });
+        var result = Indicators.macd(closes);
+        return round(result.hist[39] - 2 * (result.dif[39] - result.dea[39]), 10);
+      }, 0);
+
+      test('指标 KDJ：常数区间 K/D/J 从 50 开始', function () {
+        var bars = [];
+        for (var i = 0; i < 9; i += 1) bars.push({ high: 11, low: 9, close: 10 });
+        var result = Indicators.kdj(bars);
+        return [result.k[8], result.d[8], result.j[8]];
+      }, [50, 50, 50]);
+
+      test('指标 KDJ：收盘到区间上沿的递推值', function () {
+        var bars = [];
+        for (var i = 0; i < 9; i += 1) bars.push({ high: 11, low: 9, close: 10 });
+        bars.push({ high: 11, low: 9, close: 11 });
+        var result = Indicators.kdj(bars);
+        return [round(result.k[9], 4), round(result.d[9], 4), round(result.j[9], 4)];
+      }, [66.6667, 55.5556, 88.8889]);
+
+      test('指标 KDJ：最高等于最低时 RSV 记 0', function () {
+        var bars = [];
+        for (var i = 0; i < 10; i += 1) bars.push({ high: 10, low: 10, close: 10 });
+        var result = Indicators.kdj(bars);
+        return [round(result.k[9], 4), round(result.d[9], 4), round(result.j[9], 4)];
+      }, [33.3333, 44.4444, 11.1111]);
+
+      test('指标 RSI：连续上涨为 100', function () {
+        var closes = Array.from({ length: 20 }, function (_, index) { return index + 1; });
+        return Indicators.rsi(closes, 14)[14];
+      }, 100);
+
+      test('指标 RSI：全平盘为 50', function () {
+        return Indicators.rsi(new Array(20).fill(10), 14)[14];
+      }, 50);
+
+      test('指标 RSI：连续下跌为 0', function () {
+        var closes = Array.from({ length: 20 }, function (_, index) { return 20 - index; });
+        return Indicators.rsi(closes, 14)[14];
+      }, 0);
+
+      test('指标 RSI：混合序列的 Wilder 平滑', function () {
+        var result = Indicators.rsi([1, 2, 3, 2, 4], 3);
+        return [round(result[3], 4), round(result[4], 4)];
+      }, [66.6667, 83.3333]);
+
+      test('指标 BOLL：常数序列三线重合', function () {
+        var result = Indicators.boll(new Array(20).fill(10), 20, 2);
+        return [result.mid[19], result.upper[19], result.lower[19]];
+      }, [10, 10, 10]);
+
+      test('指标 BOLL：1—20 序列的均值与上下轨', function () {
+        var closes = Array.from({ length: 20 }, function (_, index) { return index + 1; });
+        var result = Indicators.boll(closes, 20, 2);
+        return [round(result.mid[19], 4), round(result.upper[19], 4), round(result.lower[19], 4)];
+      }, [10.5, 22.0326, -1.0326]);
+
+      test('指标 BOLL：第 20 根之前为 null', function () {
+        var result = Indicators.boll(new Array(30).fill(10), 20, 2);
+        return result.mid[18];
+      }, null);
+
+      test('指标回撤：100→120→90→110 为 -25%', function () {
+        return Indicators.maxDrawdown([100, 120, 90, 110]);
+      }, -0.25);
+
+      test('指标回撤：单调不跌为 0', function () {
+        return Indicators.maxDrawdown([100, 100, 100]);
+      }, 0);
+
+      test('指标波动：常数收益率为 0', function () {
+        return Indicators.annualizedVolatility([0.01, 0.01, 0.01]);
+      }, 0);
+
+      test('指标波动：正负交替收益率的年化值', function () {
+        return round(Indicators.annualizedVolatility([0.01, -0.01, 0.01, -0.01]), 4);
+      }, 0.1833);
+
+      test('聚合：周一至周五合成一根周线', function () {
+        var daily = [
+          { date: '2026-10-26', open: 10, close: 11, high: 12, low: 9, volume: 100 },
+          { date: '2026-10-27', open: 11, close: 12, high: 13, low: 10, volume: 200 },
+          { date: '2026-10-28', open: 12, close: 13, high: 14, low: 11, volume: 300 },
+          { date: '2026-10-29', open: 13, close: 14, high: 15, low: 12, volume: 400 },
+          { date: '2026-10-30', open: 14, close: 15, high: 16, low: 13, volume: 500 }
+        ];
+        var weekly = PriceHistory.aggregate(daily, 'week');
+        return [
+          weekly.length,
+          weekly[0].open,
+          weekly[0].close,
+          weekly[0].high,
+          weekly[0].low,
+          weekly[0].volume,
+          weekly[0].partial
+        ];
+      }, [1, 10, 15, 16, 9, 1500, false]);
+
+      test('聚合：跨周分成两根，且不修改日线', function () {
+        var daily = [
+          { date: '2026-10-23', open: 10, close: 11, high: 12, low: 9, volume: 100 },
+          { date: '2026-10-26', open: 11, close: 12, high: 13, low: 10, volume: 200 }
+        ];
+        var before = JSON.stringify(daily);
+        var weekly = PriceHistory.aggregate(daily, 'week');
+        return [weekly.length, weekly[0].endDate, weekly[1].endDate, JSON.stringify(daily) === before];
+      }, [2, '2026-10-23', '2026-10-26', true]);
+
+      test('聚合：跨月分成两根', function () {
+        var daily = [
+          { date: '2026-09-30', open: 10, close: 11, high: 12, low: 9, volume: 100 },
+          { date: '2026-10-08', open: 11, close: 12, high: 13, low: 10, volume: 200 }
+        ];
+        var monthly = PriceHistory.aggregate(daily, 'month');
+        return [monthly.length, monthly[0].date, monthly[1].date];
+      }, [2, '2026-09-30', '2026-10-08']);
+
+      test('聚合：周键与月末日期', function () {
+        return [
+          PriceHistory.periodKey('2026-10-28', 'week'),
+          PriceHistory.periodEnd('2026-10-28', 'week'),
+          PriceHistory.periodKey('2026-10-28', 'month'),
+          PriceHistory.periodEnd('2026-10-28', 'month')
+        ];
+      }, ['2026-10-26', '2026-10-30', '2026-10', '2026-10-31']);
+
+      test('历史：茅台日线剔除负值后仍不少于 2000 根', function () {
+        var bars = PriceHistory.dailyBars('600519');
+        return [
+          bars[0].close > 0,
+          bars.length >= 2000,
+          bars[bars.length - 1].date >= '2026-10-30',
+          PriceHistory.negativeCount('600519') > 0
+        ];
+      }, [true, true, true, true]);
+
+      test('历史：周线/月线聚合数量合理', function () {
+        var weekly = PriceHistory.barsFor('600519', 'week');
+        var monthly = PriceHistory.barsFor('600519', 'month');
+        return [weekly.length > 480, monthly.length > 110];
+      }, [true, true]);
+
+      function risingBars(count, start) {
+        var bars = [];
+        for (var i = 0; i < count; i += 1) {
+          var close = (start || 1) + i;
+          bars.push({
+            date: '2026-01-' + String((i % 28) + 1).padStart(2, '0'),
+            open: close - 0.2,
+            close: close,
+            high: close + 0.5,
+            low: close - 0.5,
+            volume: 1000
+          });
+        }
+        return bars;
+      }
+
+      test('信号：单边上涨识别为多头排列', function () {
+        var s = SignalEngine.compute(risingBars(100, 1), 'day');
+        return [s.trend, s.kdjState];
+      }, ['多头排列', '超买']);
+
+      test('信号：MA40 与 20 日动量按收盘价计算', function () {
+        var s = SignalEngine.compute(risingBars(100, 1), 'day');
+        return [s.ma40, s.momentum20];
+      }, [80.5, 25]);
+
+      test('信号：横盘时 RSI 为 50、布林带宽度为 0', function () {
+        var bars = risingBars(80, 100).map(function (bar) {
+          return { date: bar.date, open: 100, close: 100, high: 100, low: 100, volume: 1000 };
+        });
+        var s = SignalEngine.compute(bars, 'day');
+        return [s.trend, s.rsi6, s.bollWidth, s.bollState];
+      }, ['纠缠', 50, 0, '中轨上方']);
+
+      test('信号：量比按前 19 日均量计算', function () {
+        var bars = risingBars(100, 1);
+        bars[bars.length - 1].volume = 2000;
+        return SignalEngine.compute(bars, 'day').volumeRatio20;
+      }, 2);
+
+      test('信号：观察池 10 只、按分数降序、分数在 0–100', function () {
+        var rows = SignalEngine.rank();
+        var sorted = rows.every(function (row, index) {
+          return index === 0 || rows[index - 1].score >= row.score;
+        });
+        var inRange = rows.every(function (row) { return row.score >= 0 && row.score <= 100; });
+        return [rows.length, sorted, inRange];
+      }, [10, true, true]);
+
+      test('风险：空持仓给出 empty', function () {
+        return RiskEngine.compute([], {}, 60).reason;
+      }, 'empty');
+
+      test('风险：单只持仓权重 100%、等效持股数 1', function () {
+        var result = RiskEngine.compute(
+          [{ symbol: '600519', shares: 100, cost: 1500 }],
+          { 600519: { price: 1600 } },
+          60
+        );
+        return [result.ok, Math.round(result.topWeight * 100) / 100,
+          Math.round(result.effective * 100) / 100, result.days >= 200, result.vol250 != null];
+      }, [true, 1, 1, true, true]);
+
+      test('风险：两只等市值持仓权重各 50%、等效持股数 2', function () {
+        var result = RiskEngine.compute(
+          [
+            { symbol: '600519', shares: 100, cost: 1500 },
+            { symbol: '000858', shares: 1600, cost: 90 }
+          ],
+          { 600519: { price: 1600 }, '000858': { price: 100 } },
+          60
+        );
+        return [result.ok, Math.round(result.topWeight * 100) / 100,
+          Math.round(result.effective * 100) / 100];
+      }, [true, 0.5, 2]);
+
+      test('风险：未知标的不拿其他股票数据顶替', function () {
+        return RiskEngine.compute(
+          [{ symbol: 'FAKE01', shares: 100, cost: 10 }],
+          { FAKE01: { price: 10 } },
+          60
+        ).reason;
+      }, 'stock');
+
+      test('预测：少于 250 根日线明确拒绝', function () {
+        try {
+          ForecastEngine.run(risingBars(100, 1), {});
+          return 'no-error';
+        } catch (err) {
+          return err.message;
+        }
+      }, '至少需要 250 根日线才能做预测/回测');
+
+      test('预测：AUC 对完全正确排序为 1、完全反向为 0', function () {
+        var perfect = [{ p: 0.1, y: 0 }, { p: 0.2, y: 0 }, { p: 0.8, y: 1 }, { p: 0.9, y: 1 }];
+        var reversed = [{ p: 0.9, y: 0 }, { p: 0.8, y: 0 }, { p: 0.2, y: 1 }, { p: 0.1, y: 1 }];
+        return [ForecastEngine._internals.auc(perfect), ForecastEngine._internals.auc(reversed)];
+      }, [1, 0]);
+
+      test('预测：茅台样本外指标都在合理区间', function () {
+        var result = ForecastEngine.run(PriceHistory.dailyBars('600519'), {});
+        var last = result.forecast[result.forecast.length - 1];
+        var inUnit = function (value) { return value == null || (value >= 0 && value <= 1); };
+        return [
+          result.forecast.length,
+          inUnit(result.logistic.probability) && inUnit(result.logistic.accuracy) && inUnit(result.logistic.auc),
+          result.logistic.total >= 300,
+          last.lower <= last.price && last.price <= last.upper,
+          result.holt.samples > 0
+        ];
+      }, [5, true, true, true, true]);
+
+      /* ---------- v0.4：池子配置 / 快照新鲜度 / MACD 告警 / 指数闸门 / 池子总览 ---------- */
+
+      test('池子：课程组 10 只、实战组 12 只（含 2 只 ETF）、4 个指数', function () {
+        return [
+          POOL_GROUPS.course.stocks.length,
+          POOL_GROUPS.course.indices.length,
+          POOL_GROUPS.practical.stocks.length,
+          POOL_GROUPS.practical.stocks.filter(function (item) { return item.type === 'etf'; }).length,
+          POOL_GROUPS.practical.indices.length
+        ];
+      }, [10, 2, 12, 2, 4]);
+
+      test('池子：切换分组后列表跟随，跨组持仓仍能解析', function () {
+        setPoolGroup('practical');
+        var practical = [
+          UNIVERSE.length,
+          INDICES.length,
+          UNIVERSE.some(function (item) { return item.symbol === '159915'; }),
+          !!UNIVERSE_BY_SYMBOL['600519'],
+          !!ALL_BY_SYMBOL['SH000688']
+        ];
+        setPoolGroup('course');
+        var course = [
+          UNIVERSE.length,
+          INDICES.length,
+          UNIVERSE.every(function (item) { return item.symbol !== '159915'; })
+        ];
+        return practical.concat(course);
+      }, [12, 4, true, true, true, 10, 2, true]);
+
+      test('快照：26 个标的、lastDate 与最大 bar 日期一致', function () {
+        var maxDate = '';
+        ['stocks', 'indices'].forEach(function (group) {
+          Object.keys(SNAPSHOT[group]).forEach(function (key) {
+            var bars = SNAPSHOT[group][key].bars;
+            if (bars.length && bars[bars.length - 1][0] > maxDate) maxDate = bars[bars.length - 1][0];
+          });
+        });
+        return [SNAPSHOT.meta.symbols, SNAPSHOT.meta.lastDate === maxDate,
+          Object.keys(SNAPSHOT.stocks).length, Object.keys(SNAPSHOT.indices).length];
+      }, [26, true, 22, 4]);
+
+      test('快照：长鑫科技从上市日 2026-07-27 起累积到 lastDate', function () {
+        var bars = SNAPSHOT.stocks['688825'].bars;
+        return [bars[0][0], bars[bars.length - 1][0] === SNAPSHOT.meta.lastDate,
+          bars.length >= 64];
+      }, ['2026-07-27', true, true]);
+
+      test('快照：ETF 与指数各有日线', function () {
+        return [
+          SNAPSHOT.stocks['159915'].bars.length > 2000,
+          SNAPSHOT.stocks['588000'].bars.length > 1000,
+          SNAPSHOT.indices['SZ399006'].bars.length > 2000,
+          SNAPSHOT.indices['SH000688'].bars[0][0]
+        ];
+      }, [true, true, true, '2019-12-31']);
+
+      test('新鲜度：周五快照在周六为 0 个交易日', function () {
+        return Freshness.tradingDaysAfter('2026-10-30', Date.UTC(2026, 9, 31, 4, 0, 0));
+      }, 0);
+
+      test('新鲜度：周五快照到下周一为 1、下周二为 2', function () {
+        return [
+          Freshness.tradingDaysAfter('2026-10-30', Date.UTC(2026, 10, 2, 4, 0, 0)),
+          Freshness.tradingDaysAfter('2026-10-30', Date.UTC(2026, 10, 3, 4, 0, 0))
+        ];
+      }, [1, 2]);
+
+      test('新鲜度：周四快照到下周一跨过周五为 2', function () {
+        return Freshness.tradingDaysAfter('2026-10-29', Date.UTC(2026, 10, 2, 4, 0, 0));
+      }, 2);
+
+      function macdBars(kind) {
+        var closes = [];
+        var i;
+        if (kind === 'gold') {
+          for (i = 0; i < 60; i += 1) closes.push(120 - i * 0.8);
+          for (i = 0; i < 2; i += 1) closes.push(72 + i * 0.7);
+        } else {
+          for (i = 0; i < 60; i += 1) closes.push(60 + i * 0.8);
+          for (i = 0; i < 2; i += 1) closes.push(108 - i * 0.7);
+        }
+        return closes.map(function (close, index) {
+          return [
+            new Date(Date.UTC(2025, 0, 1) + index * 86400000).toISOString().slice(0, 10),
+            close - 0.5, close, close + 1, close - 1, 1000
+          ];
+        });
+      }
+
+      test('告警：MACD 金叉识别为 up，id 与日级冷却正确', function () {
+        var events = AlertEngine.macdEvents({ symbol: 'T1', name: '测试' }, macdBars('gold'), 1000);
+        return events.length
+          ? [events[0].id, events[0].title, events[0].tone, events[0].cooldownMs]
+          : 'none';
+      }, ['T1:macd-golden', 'MACD 金叉', 'up', 72000000]);
+
+      test('告警：MACD 死叉识别为 down', function () {
+        var events = AlertEngine.macdEvents({ symbol: 'T2', name: '测试' }, macdBars('death'), 1000);
+        return events.length ? [events[0].id, events[0].title, events[0].tone] : 'none';
+      }, ['T2:macd-death', 'MACD 死叉', 'down']);
+
+      test('告警：单边上涨不产生 MACD 交叉告警', function () {
+        var bars = [];
+        for (var i = 0; i < 80; i += 1) {
+          bars.push({ date: '2025-01-01', open: 10 + i, close: 10 + i, high: 11 + i, low: 9 + i, volume: 1 });
+        }
+        return AlertEngine.macdEvents({ symbol: 'T3', name: '测试' }, bars, 1000).length;
+      }, 0);
+
+      test('告警：日线不足 60 根不判 MACD 交叉', function () {
+        return AlertEngine.macdEvents({ symbol: 'T4', name: '测试' }, macdBars('gold').slice(0, 59), 1000).length;
+      }, 0);
+
+      test('告警：MACD 冷却 20 小时，30 分钟后不重复', function () {
+        var event = AlertEngine.macdEvents({ symbol: 'T5', name: '测试' }, macdBars('gold'), 1000)[0];
+        var first = AlertEngine.applyCooldown([event], {}, 1000);
+        var second = AlertEngine.applyCooldown([event], first.lastFired, 1000 + 30 * 60 * 1000);
+        var third = AlertEngine.applyCooldown([event], second.lastFired, 1000 + 21 * 60 * 60 * 1000);
+        return [first.events.length, second.events.length, third.events.length];
+      }, [1, 0, 1]);
+
+      test('告警：交叉发生后次日不再重复', function () {
+        var bars = macdBars('gold');
+        var last = bars[bars.length - 1];
+        bars.push({
+          date: '2025-06-01',
+          open: last.close,
+          close: last.close + 1,
+          high: last.close + 2,
+          low: last.close - 1,
+          volume: 1000
+        });
+        return AlertEngine.macdEvents({ symbol: 'T6', name: '测试' }, bars, 1000).length;
+      }, 0);
+
+      test('告警：MACD 回看 250 根，而非只取 60 根', function () {
+        var quoteTime = Date.parse('2026-10-30T15:05:00+08:00');
+        var bars = AlertEngine.barsThrough(SNAPSHOT, '600519', quoteTime, AlertEngine.MACD_LOOKBACK);
+        return [bars.length, AlertEngine.MACD_MIN_BARS];
+      }, [250, 60]);
+
+      test('告警：|DIF−DEA|/收盘 < 0.02% 才加临界提示', function () {
+        var hit = AlertEngine.macdEdgeNote(0.1, 0.0999, 28.52);
+        var miss = AlertEngine.macdEdgeNote(1, 0.9, 28.52);
+        return [hit.indexOf('临界') > -1, miss];
+      }, [true, '']);
+
+      test('告警：MACD 金叉集合与总览金叉行一致（250 根 vs 全量）', function () {
+        setPoolGroup('practical');
+        var overview = PoolOverview.compute()
+          .filter(function (row) { return row.macdState === '金叉'; })
+          .map(function (row) { return row.symbol; }).sort();
+        var quoteTime = Date.parse(SNAPSHOT.meta.lastDate + 'T15:05:00+08:00');
+        var alerts = [];
+        window.UNIVERSE.forEach(function (stock) {
+          var bars = AlertEngine.barsThrough(SNAPSHOT, stock.symbol, quoteTime, AlertEngine.MACD_LOOKBACK);
+          AlertEngine.macdEvents(stock, bars, 1000).forEach(function (event) {
+            if (event.id.indexOf(':macd-golden') > 0) alerts.push(stock.symbol);
+          });
+        });
+        alerts.sort();
+        setPoolGroup('course');
+        return JSON.stringify(alerts) === JSON.stringify(overview);
+      }, true);
+
+      test('指数闸门：创业板指与科创50 输出完整字段', function () {
+        return GateEngine.GATE_INDICES.map(function (item) {
+          var gate = GateEngine.compute(item.symbol);
+          return [gate.ok, gate.date === SNAPSHOT.meta.lastDate, gate.close > 0, gate.ma250 > 0,
+            gate.difStreak >= 0, typeof gate.gate1, typeof gate.gate2];
+        });
+      }, [
+        [true, true, true, true, true, 'boolean', 'boolean'],
+        [true, true, true, true, true, 'boolean', 'boolean']
+      ]);
+
+      test('指数闸门：缺失标的返回样本不足', function () {
+        var gate = GateEngine.compute('FAKE99');
+        return [gate.ok, gate.reason.indexOf('日线不足') === 0];
+      }, [false, true]);
+
+      test('指数闸门：合成上升序列两层闸门都达成', function () {
+        var closes = [];
+        var i;
+        for (i = 0; i < 250; i += 1) closes.push(200 - i * 0.4);
+        for (i = 0; i < 40; i += 1) closes.push(100 + i * 3);
+        var raw = closes.map(function (close, index) {
+          return [
+            new Date(Date.UTC(2025, 0, 1) + index * 86400000).toISOString().slice(0, 10),
+            close - 0.5, close, close + 1, close - 1, 1000
+          ];
+        });
+        SNAPSHOT.stocks.__GATE__ = {
+          symbol: '__GATE__', name: '测试指数', tx: 'sh000000', type: 'index', bars: raw
+        };
+        PriceHistory.clearCache();
+        var gate = GateEngine.compute('__GATE__');
+        delete SNAPSHOT.stocks.__GATE__;
+        PriceHistory.clearCache();
+        return [gate.gate1, gate.gate2, gate.difStreak >= 3, gate.aboveMa20];
+      }, [true, true, true, true]);
+
+      test('信号：单边下跌识别为空头排列', function () {
+        var bars = [];
+        for (var i = 0; i < 100; i += 1) {
+          bars.push({ date: '2025-01-01', open: 100 - i, close: 100 - i, high: 101 - i, low: 99 - i, volume: 1 });
+        }
+        return SignalEngine.compute(bars, 'day').trend;
+      }, '空头排列');
+
+      test('信号：距年线按 MA250 计算', function () {
+        var bars = [];
+        for (var i = 1; i <= 300; i += 1) {
+          bars.push({ date: '2025-01-01', open: i, close: i, high: i + 1, low: i - 1, volume: 1 });
+        }
+        var s = SignalEngine.compute(bars, 'day');
+        return [s.ma250, Math.round(s.ma250Distance * 100) / 100];
+      }, [175.5, 70.94]);
+
+      test('总览：实战组 12 行、按当日涨跌降序', function () {
+        setPoolGroup('practical');
+        var rows = PoolOverview.compute();
+        var sorted = rows.every(function (row, index) {
+          if (index === 0) return true;
+          var prev = rows[index - 1].pctDay;
+          var current = row.pctDay;
+          return (prev == null ? -Infinity : prev) >= (current == null ? -Infinity : current);
+        });
+        var etfs = rows.filter(function (row) { return row.type === 'etf'; }).length;
+        setPoolGroup('course');
+        return [rows.length, sorted, etfs];
+      }, [12, true, 2]);
+
+      test('总览：医药集群当日涨幅与原始日线一致', function () {
+        setPoolGroup('practical');
+        var rows = PoolOverview.compute();
+        var bySymbol = {};
+        rows.forEach(function (row) { bySymbol[row.symbol] = row; });
+        var result = ['000513', '300759', '000963', '003006'].map(function (symbol) {
+          var bars = PriceHistory.dailyBars(symbol);
+          var last = bars[bars.length - 1];
+          var prev = bars[bars.length - 2];
+          var direct = (Number(last.close) / Number(prev.close) - 1) * 100;
+          return Math.round(bySymbol[symbol].pctDay * 100) / 100 === Math.round(direct * 100) / 100;
+        });
+        setPoolGroup('course');
+        return result;
+      }, [true, true, true, true]);
+
+      test('总览：相对强度与金叉行与原始日线一致', function () {
+        setPoolGroup('practical');
+        var rows = PoolOverview.compute();
+        var lizhu = rows.find(function (row) { return row.symbol === '000513'; });
+        var bench = {};
+        PriceHistory.dailyBars('SH000300').forEach(function (b) { bench[b.date] = Number(b.close); });
+        var bars = PriceHistory.dailyBars('000513');
+        var n = bars.length;
+        var rs = n > 21 && bench[bars[n - 1].date] && bench[bars[n - 21].date]
+          ? ((Number(bars[n - 1].close) / Number(bars[n - 21].close) - 1) -
+             (bench[bars[n - 1].date] / bench[bars[n - 21].date] - 1)) * 100
+          : null;
+        var rsOk = rs == null ? lizhu.rs20 == null
+          : Math.round(lizhu.rs20 * 100) / 100 === Math.round(rs * 100) / 100;
+        // 金叉行独立复核：最后一根 DIF>DEA 且前一根 DIF<=DEA（Indicators.macd 独立重算）
+        var goldenOk = rows.filter(function (row) { return row.macdState === '金叉'; })
+          .every(function (row) {
+            var closes = PriceHistory.dailyBars(row.symbol).map(function (b) { return Number(b.close); });
+            var m = Indicators.macd(closes, 12, 26, 9);
+            var t = m.dif.length - 1;
+            return t > 0 && m.dif[t] != null && m.dea[t] != null &&
+              m.dif[t] > m.dea[t] && (m.dif[t - 1] == null || m.dif[t - 1] <= m.dea[t - 1]);
+          });
+        setPoolGroup('course');
+        return [rsOk, goldenOk];
+      }, [true, true]);
+
+      var passCount = results.filter(function (item) { return item.pass; }).length;
+      document.getElementById('pass-count').textContent = String(passCount);
+      document.getElementById('total-count').textContent = String(results.length);
+      var verdict = document.getElementById('verdict');
+      verdict.textContent = passCount === results.length ? '全部通过' : '存在失败';
+      verdict.className = 'badge ' + (passCount === results.length ? 'badge-live' : 'badge-warn');
+
+      document.getElementById('test-results').innerHTML = results.map(function (item, index) {
+        return '<tr>' +
+          '<td>' + (index + 1) + '</td>' +
+          '<td class="desc">' + item.name + '</td>' +
+          '<td class="' + (item.pass ? 'test-pass' : 'test-fail') + '">' + (item.pass ? '通过' : '失败') + '</td>' +
+          '<td class="expected">' + show(item.expected) + '</td>' +
+          '<td class="actual">' + show(item.actual) + '</td>' +
+        '</tr>';
+      }).join('');
+    })();
+  </script>
+</body>
+</html>

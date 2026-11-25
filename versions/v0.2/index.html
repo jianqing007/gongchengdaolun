@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="股迹：本地运行的实时行情、持仓盈亏与盘中告警看板，仅供课程学习。">
+  <title>股迹 · AI 盯盘台</title>
+  <link rel="stylesheet" href="css/style.css?v=0.2.2">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">股</div>
+        <div>
+          <h1>股迹 <span>AI 盯盘台</span></h1>
+          <p>实时行情 · 持仓盈亏 · 盘中异动</p>
+        </div>
+      </div>
+      <div class="status">
+        <span id="mode-badge" class="badge badge-muted"><i></i>连接中</span>
+        <span id="market-status" class="badge badge-muted">--</span>
+        <span id="last-update">更新时间 --</span>
+        <button id="refresh-btn" class="btn btn-ghost" type="button">刷新</button>
+      </div>
+    </header>
+
+    <div id="error-banner" class="banner hidden" role="alert" aria-live="polite">
+      <span id="banner-text" class="banner-text"></span>
+      <button id="banner-close" class="banner-close" type="button" aria-label="关闭提示">×</button>
+    </div>
+
+    <section class="index-grid" id="index-grid" aria-label="指数行情"></section>
+
+    <main class="layout">
+      <div class="main-column">
+        <section class="panel chart-panel" id="chart-panel">
+          <div class="panel-head chart-head">
+            <div>
+              <h2>分时观察</h2>
+              <p class="muted" id="chart-subtitle">--</p>
+            </div>
+            <div class="chart-tools">
+              <select id="chart-symbol" class="chart-select" aria-label="选择分时股票"></select>
+              <span id="chart-source" class="badge badge-muted">--</span>
+            </div>
+          </div>
+          <div class="chart-summary">
+            <span id="chart-price" class="chart-price">--</span>
+            <span id="chart-pct" class="chart-pct">--</span>
+            <span id="chart-note" class="muted"></span>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="intraday-canvas" width="800" height="240" aria-label="股票当日分时图"></canvas>
+            <div id="chart-empty" class="empty hidden">
+              <p id="chart-empty-text">暂无分时数据。选择股票或等待行情刷新。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel watchlist-panel">
+          <div class="panel-head">
+            <div>
+              <h2>自选行情</h2>
+              <p class="muted">10 只标的 · 3 秒刷新</p>
+            </div>
+            <span class="muted" id="quote-count">--</span>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="watchlist-table">
+              <thead>
+                <tr>
+                  <th>代码 / 名称</th>
+                  <th class="num">最新价</th>
+                  <th class="num">涨跌幅</th>
+                  <th class="num">涨跌额</th>
+                  <th class="num">量比</th>
+                  <th class="num">换手率</th>
+                  <th class="num">最高 / 最低</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <aside class="panel form-panel">
+        <div class="panel-head">
+          <div>
+            <h2 id="form-title">添加持仓</h2>
+            <p class="muted">成本价按每股填写</p>
+          </div>
+        </div>
+        <form id="holding-form" novalidate>
+          <div id="form-feedback" class="form-feedback hidden" role="status" aria-live="polite"></div>
+          <label>股票
+            <select id="form-symbol" name="symbol"></select>
+            <span class="field-error" id="error-symbol"></span>
+          </label>
+          <label>股数
+            <input id="form-shares" name="shares" type="number" min="1" step="1" inputmode="numeric" placeholder="例如 100">
+            <span class="field-error" id="error-shares"></span>
+          </label>
+          <label>成本价（元/股）
+            <input id="form-cost" name="cost" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="例如 1500.00">
+            <span class="field-error" id="error-cost"></span>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="form-submit">添加持仓</button>
+            <button type="button" class="btn btn-ghost hidden" id="form-cancel">取消编辑</button>
+          </div>
+          <p class="form-hint" id="form-hint">持仓保存在本机浏览器，不会上传。</p>
+        </form>
+      </aside>
+    </main>
+
+    <section class="panel holdings-panel">
+      <div class="panel-head">
+        <div>
+          <h2>我的持仓</h2>
+          <p class="muted" id="holdings-subtitle">--</p>
+        </div>
+        <div class="toolbar">
+          <button id="sample-btn" class="btn btn-ghost" type="button">载入示例</button>
+          <button id="clear-btn" class="btn btn-ghost danger-text" type="button">清空</button>
+        </div>
+      </div>
+      <div class="summary-grid" id="summary-grid"></div>
+      <div class="table-wrap">
+        <table class="data-table" id="holdings-table">
+          <thead>
+            <tr>
+              <th>股票</th>
+              <th class="num">现价</th>
+              <th class="num">涨跌幅</th>
+              <th class="num">股数</th>
+              <th class="num">成本价</th>
+              <th class="num">市值</th>
+              <th class="num">浮动盈亏</th>
+              <th class="num">盈亏比例</th>
+              <th class="num">日盈亏</th>
+              <th class="num">权重</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div id="holdings-empty" class="empty hidden">
+          <p>还没有持仓。在上方表单添加一只，或点击“载入示例”。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel alerts-panel">
+      <div class="panel-head">
+        <div>
+          <h2>盘中告警</h2>
+          <p class="muted" id="alert-subtitle">实时行情触发 · 同一规则 30 分钟冷却</p>
+        </div>
+        <div class="toolbar">
+          <span id="alert-count" class="muted">0 条</span>
+          <button id="alert-clear" class="btn btn-ghost btn-small" type="button">清空</button>
+        </div>
+      </div>
+      <div id="alert-list" class="alert-list" aria-live="polite"></div>
+      <div id="alert-empty" class="empty">
+        <p>暂时没有触发告警。行情变化达到阈值时会在这里提示。</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>数据来源：腾讯证券公开行情接口（可能延迟或中断）· 历史数据为前复权日线 · 仅供课程学习，不构成投资建议。</p>
+      <p>股迹 v0.2 · 本地运行，不上传持仓数据 · 行情为约 3 秒快照，非逐笔成交。</p>
+    </footer>
+  </div>
+
+  <script src="js/data/universe.js?v=0.2.2"></script>
+  <script src="js/data/snapshot.js?v=0.2.2"></script>
+  <script src="js/core/portfolio.js?v=0.2.2"></script>
+  <script src="js/core/storage.js?v=0.2.2"></script>
+  <script src="js/core/quote-state.js?v=0.2.2"></script>
+  <script src="js/core/alerts.js?v=0.2.2"></script>
+  <script src="js/data/provider.js?v=0.2.2"></script>
+  <script src="js/ui/minute-chart.js?v=0.2.2"></script>
+  <script src="js/ui/app.js?v=0.2.2"></script>
+</body>
+</html>

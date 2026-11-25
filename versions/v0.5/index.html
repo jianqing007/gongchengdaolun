@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="股迹：本地运行的实时行情、多周期K线、池子总览、指数闸门、持仓盈亏与盘中告警看板，仅供课程学习。">
+  <title>股迹 · AI 盯盘台</title>
+  <link rel="stylesheet" href="css/style.css?v=0.5.0">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">股</div>
+        <div>
+          <h1>股迹 <span>AI 盯盘台</span></h1>
+          <p>实时行情 · 多周期K线 · 池子总览 · 指数闸门</p>
+        </div>
+      </div>
+      <div class="status">
+        <span id="mode-badge" class="badge badge-muted"><i></i>连接中</span>
+        <span id="market-status" class="badge badge-muted">--</span>
+        <span id="data-date" class="badge badge-muted" title="快照最后一个交易日">数据截至 --</span>
+        <span id="last-update">更新时间 --</span>
+        <button id="refresh-btn" class="btn btn-ghost" type="button">刷新</button>
+      </div>
+    </header>
+
+    <div id="error-banner" class="banner hidden" role="alert" aria-live="polite">
+      <span id="banner-text" class="banner-text"></span>
+      <button id="banner-close" class="banner-close" type="button" aria-label="关闭提示">×</button>
+    </div>
+
+    <div id="stale-banner" class="banner banner-stale hidden" role="status">
+      <span id="stale-text" class="banner-text"></span>
+    </div>
+
+    <section class="index-grid" id="index-grid" aria-label="指数行情">
+      <div class="index-card is-skeleton" aria-hidden="true">
+        <div class="sk sk-line" style="width:36%"></div>
+        <div class="sk sk-big"></div>
+        <div class="sk sk-line" style="width:52%"></div>
+      </div>
+      <div class="index-card is-skeleton" aria-hidden="true">
+        <div class="sk sk-line" style="width:30%"></div>
+        <div class="sk sk-big"></div>
+        <div class="sk sk-line" style="width:46%"></div>
+      </div>
+    </section>
+
+    <main class="layout">
+      <div class="main-column">
+        <section class="panel chart-panel" id="chart-panel">
+          <div class="panel-head chart-head">
+            <div>
+              <h2>技术分析</h2>
+              <p class="muted" id="chart-subtitle">--</p>
+            </div>
+            <div class="chart-tools">
+              <select id="chart-symbol" class="chart-select" aria-label="选择分析股票"></select>
+              <span id="chart-source" class="badge badge-muted">--</span>
+            </div>
+          </div>
+
+          <div class="chart-tabbar">
+            <div class="chart-tabs" role="tablist" aria-label="图表周期">
+              <button class="chart-tab is-active" type="button" data-period="minute" role="tab" aria-selected="true">分时</button>
+              <button class="chart-tab" type="button" data-period="day" role="tab" aria-selected="false">日K</button>
+              <button class="chart-tab" type="button" data-period="week" role="tab" aria-selected="false">周K</button>
+              <button class="chart-tab" type="button" data-period="month" role="tab" aria-selected="false">月K</button>
+            </div>
+            <div class="chart-actions">
+              <select id="chart-range" class="chart-select chart-range hidden" aria-label="显示区间">
+                <option value="60">60 根</option>
+                <option value="120" selected>120 根</option>
+                <option value="250">250 根</option>
+                <option value="0">全部</option>
+              </select>
+              <button id="indicator-toggle" class="btn btn-ghost btn-small hidden" type="button" aria-expanded="false">指标</button>
+            </div>
+          </div>
+
+          <div id="indicator-panel" class="indicator-panel hidden">
+            <div class="indicator-row">
+              <span class="indicator-label">预设</span>
+              <div class="indicator-chips">
+                <button class="indicator-chip" type="button" data-preset="simple">简洁</button>
+                <button class="indicator-chip is-active" type="button" data-preset="standard">标准</button>
+                <button class="indicator-chip" type="button" data-preset="full">完整</button>
+              </div>
+            </div>
+            <div class="indicator-row">
+              <span class="indicator-label">主图均线</span>
+              <div class="indicator-checks" id="ma-checks"></div>
+            </div>
+            <div class="indicator-row">
+              <span class="indicator-label">主图叠加</span>
+              <label class="indicator-check"><input type="checkbox" id="indicator-boll"> BOLL(20,2)</label>
+              <label class="indicator-check"><input type="checkbox" id="indicator-log"> 对数坐标</label>
+            </div>
+            <div class="indicator-row">
+              <span class="indicator-label">副图</span>
+              <div class="indicator-subplots">
+                <select id="subplot-1" class="chart-select" aria-label="副图一">
+                  <option value="">无</option>
+                  <option value="volume">成交量</option>
+                  <option value="macd">MACD</option>
+                  <option value="kdj">KDJ</option>
+                  <option value="rsi">RSI</option>
+                </select>
+                <select id="subplot-2" class="chart-select" aria-label="副图二">
+                  <option value="">无</option>
+                  <option value="volume">成交量</option>
+                  <option value="macd">MACD</option>
+                  <option value="kdj">KDJ</option>
+                  <option value="rsi">RSI</option>
+                </select>
+                <span class="indicator-hint" id="indicator-hint">最多两个副图</span>
+              </div>
+            </div>
+            <div class="indicator-row indicator-row-end">
+              <button id="indicator-reset" class="btn btn-ghost btn-small" type="button">恢复默认</button>
+            </div>
+          </div>
+
+          <div class="chart-summary">
+            <span id="chart-price" class="chart-price">--</span>
+            <span id="chart-pct" class="chart-pct">--</span>
+            <span id="chart-note" class="muted"></span>
+          </div>
+          <div id="replay-bar" class="replay-bar hidden">
+            <button id="replay-play" class="btn btn-ghost btn-small" type="button" title="从最早一根开始逐根回放">回放</button>
+            <select id="replay-speed" class="chart-select replay-speed" aria-label="回放速度">
+              <option value="1">1×</option>
+              <option value="2" selected>2×</option>
+              <option value="4">4×</option>
+              <option value="8">8×</option>
+            </select>
+            <div class="replay-track" aria-hidden="true"><div id="replay-fill"></div></div>
+            <span id="replay-date" class="muted replay-date">--</span>
+            <button id="replay-exit" class="btn btn-ghost btn-small" type="button" title="退出回放，回到最新行情">×</button>
+          </div>
+          <div id="kline-legend" class="kline-legend hidden"></div>
+          <div class="chart-wrap" id="chart-wrap">
+            <canvas id="intraday-canvas" width="800" height="240" aria-label="股票当日分时图"></canvas>
+            <canvas id="kline-canvas" class="kline-canvas hidden" width="800" height="420" aria-label="股票K线图"></canvas>
+            <div id="kline-tooltip" class="kline-tooltip hidden" role="status"></div>
+            <div id="chart-empty" class="empty hidden">
+              <p id="chart-empty-text">暂无分时数据。选择股票或等待行情刷新。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel analysis-panel" id="analysis-panel">
+          <div class="panel-head">
+            <div>
+              <h2>分析工作台</h2>
+              <p class="muted" id="analysis-subtitle">跟随上方图表标的与周期</p>
+            </div>
+            <div class="analysis-tabs" role="tablist" aria-label="分析视图">
+              <button class="analysis-tab is-active" type="button" data-analysis-tab="signals" role="tab" aria-selected="true">追踪信号</button>
+              <button class="analysis-tab" type="button" data-analysis-tab="overview" role="tab" aria-selected="false">池子总览</button>
+              <button class="analysis-tab" type="button" data-analysis-tab="gates" role="tab" aria-selected="false">指数闸门</button>
+              <button class="analysis-tab" type="button" data-analysis-tab="risk" role="tab" aria-selected="false">组合风险</button>
+              <button class="analysis-tab" type="button" data-analysis-tab="forecast" role="tab" aria-selected="false">预测与回测</button>
+              <button id="signal-share" class="btn btn-ghost btn-small" type="button" title="把当前标的的信号卡合成为 PNG 图片保存">存图</button>
+            </div>
+          </div>
+          <div id="analysis-signals" class="analysis-body">
+            <div class="signal-grid" id="signal-grid">
+              <div class="signal-card is-skeleton" aria-hidden="true">
+                <span class="sk sk-line" style="width:28%"></span>
+                <span class="sk sk-line" style="width:46%"></span>
+                <span class="sk sk-line" style="width:82%"></span>
+              </div>
+              <div class="signal-card is-skeleton" aria-hidden="true">
+                <span class="sk sk-line" style="width:32%"></span>
+                <span class="sk sk-line" style="width:40%"></span>
+                <span class="sk sk-line" style="width:74%"></span>
+              </div>
+              <div class="signal-card is-skeleton" aria-hidden="true">
+                <span class="sk sk-line" style="width:26%"></span>
+                <span class="sk sk-line" style="width:52%"></span>
+                <span class="sk sk-line" style="width:66%"></span>
+              </div>
+              <div class="signal-card is-skeleton" aria-hidden="true">
+                <span class="sk sk-line" style="width:30%"></span>
+                <span class="sk sk-line" style="width:44%"></span>
+                <span class="sk sk-line" style="width:78%"></span>
+              </div>
+            </div>
+            <div class="analysis-summary" id="analysis-summary"></div>
+            <div class="pool-wrap">
+              <div class="pool-head"><strong>观察池排序</strong><span>固定权重 · 不构成推荐</span></div>
+              <div id="pool-list" class="pool-list"></div>
+            </div>
+          </div>
+          <div id="analysis-risk" class="analysis-body hidden">
+            <div class="risk-grid" id="risk-grid"></div>
+            <p class="analysis-note" id="risk-note"></p>
+          </div>
+          <div id="analysis-overview" class="analysis-body hidden">
+            <div class="table-wrap overview-wrap">
+              <table class="data-table overview-table">
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th class="num">收盘</th>
+                    <th class="num">当日</th>
+                    <th class="num">近 20 日</th>
+                    <th class="num">相对沪深300</th>
+                    <th>排列</th>
+                    <th>MACD</th>
+                    <th>MA20</th>
+                    <th class="num">距 20 日高</th>
+                    <th>信号摘要</th>
+                  </tr>
+                </thead>
+                <tbody id="overview-body"></tbody>
+              </table>
+            </div>
+            <p class="analysis-note" id="overview-note"></p>
+          </div>
+          <div id="analysis-gates" class="analysis-body hidden">
+            <div class="gate-grid" id="gate-grid"></div>
+            <p class="analysis-note" id="gate-note"></p>
+          </div>
+          <div id="analysis-forecast" class="analysis-body hidden">
+            <div class="forecast-grid" id="forecast-grid"></div>
+            <div class="forecast-actions">
+              <button id="forecast-run" class="btn btn-primary btn-small" type="button">运行回测</button>
+              <span id="forecast-status" class="muted">基于最新快照收盘</span>
+            </div>
+            <div id="forecast-detail" class="analysis-note"></div>
+          </div>
+        </section>
+
+        <section class="panel watchlist-panel">
+          <div class="panel-head">
+            <div>
+              <h2>自选行情</h2>
+              <p class="muted" id="watchlist-subtitle">10 只标的 · 3 秒刷新</p>
+            </div>
+            <div class="toolbar">
+              <select id="pool-group" class="chart-select" aria-label="自选分组"></select>
+              <span class="muted" id="quote-count">--</span>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" id="watchlist-table">
+              <thead>
+                <tr>
+                  <th>代码 / 名称</th>
+                  <th class="num">最新价</th>
+                  <th class="num">涨跌幅</th>
+                  <th class="num">涨跌额</th>
+                  <th class="num">量比</th>
+                  <th class="num">换手率</th>
+                  <th class="num">最高 / 最低</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="skeleton-row" aria-hidden="true">
+                  <td><span class="sk sk-line" style="width:68%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:44%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:40%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:38%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:36%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:34%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:52%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:30%"></span></td>
+                </tr>
+                <tr class="skeleton-row" aria-hidden="true">
+                  <td><span class="sk sk-line" style="width:60%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:48%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:36%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:42%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:30%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:38%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:56%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:26%"></span></td>
+                </tr>
+                <tr class="skeleton-row" aria-hidden="true">
+                  <td><span class="sk sk-line" style="width:72%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:40%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:34%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:44%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:32%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:36%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:50%"></span></td>
+                  <td class="num"><span class="sk sk-line" style="width:28%"></span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <aside class="panel form-panel">
+        <div class="panel-head">
+          <div>
+            <h2 id="form-title">建仓</h2>
+            <p class="muted" id="form-subtitle">新建一只股票的持仓</p>
+          </div>
+        </div>
+        <form id="holding-form" novalidate>
+          <div id="form-feedback" class="form-feedback hidden" role="status" aria-live="polite"></div>
+          <label>股票
+            <select id="form-symbol" name="symbol"></select>
+            <span class="field-error" id="error-symbol"></span>
+          </label>
+          <label><span id="label-shares">股数</span>
+            <input id="form-shares" name="shares" type="number" min="1" step="1" inputmode="numeric" placeholder="例如 100">
+            <span class="field-error" id="error-shares"></span>
+          </label>
+          <label id="cost-field"><span id="label-cost">成本价（元/股）</span>
+            <input id="form-cost" name="cost" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="例如 1500.00">
+            <span class="field-error" id="error-cost"></span>
+          </label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" id="form-submit">确认建仓</button>
+            <button type="button" class="btn btn-ghost hidden" id="form-cancel">取消</button>
+          </div>
+          <p class="form-hint" id="form-hint">持仓保存在本机浏览器，不会上传。</p>
+        </form>
+      </aside>
+    </main>
+
+    <section class="panel holdings-panel">
+      <div class="panel-head">
+        <div>
+          <h2>我的持仓</h2>
+          <p class="muted" id="holdings-subtitle">--</p>
+        </div>
+        <div class="toolbar">
+          <button id="sample-btn" class="btn btn-ghost" type="button">载入示例</button>
+          <button id="clear-btn" class="btn btn-ghost danger-text" type="button">清空</button>
+        </div>
+      </div>
+      <div class="summary-grid" id="summary-grid">
+        <div class="summary-card is-skeleton" aria-hidden="true">
+          <div class="sk sk-line" style="width:36%"></div>
+          <div class="sk sk-line" style="width:64%"></div>
+          <div class="sk sk-line" style="width:48%"></div>
+        </div>
+        <div class="summary-card is-skeleton" aria-hidden="true">
+          <div class="sk sk-line" style="width:30%"></div>
+          <div class="sk sk-line" style="width:58%"></div>
+          <div class="sk sk-line" style="width:42%"></div>
+        </div>
+        <div class="summary-card is-skeleton" aria-hidden="true">
+          <div class="sk sk-line" style="width:34%"></div>
+          <div class="sk sk-line" style="width:60%"></div>
+          <div class="sk sk-line" style="width:46%"></div>
+        </div>
+        <div class="summary-card is-skeleton" aria-hidden="true">
+          <div class="sk sk-line" style="width:28%"></div>
+          <div class="sk sk-line" style="width:56%"></div>
+          <div class="sk sk-line" style="width:40%"></div>
+        </div>
+        <div class="summary-card is-skeleton" aria-hidden="true">
+          <div class="sk sk-line" style="width:32%"></div>
+          <div class="sk sk-line" style="width:52%"></div>
+          <div class="sk sk-line" style="width:44%"></div>
+        </div>
+        <div class="summary-card is-skeleton" aria-hidden="true">
+          <div class="sk sk-line" style="width:30%"></div>
+          <div class="sk sk-line" style="width:60%"></div>
+          <div class="sk sk-line" style="width:38%"></div>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="holdings-table">
+          <thead>
+            <tr>
+              <th>股票</th>
+              <th class="num">现价</th>
+              <th class="num">涨跌幅</th>
+              <th class="num">股数</th>
+              <th class="num">成本价</th>
+              <th class="num">市值</th>
+              <th class="num">浮动盈亏</th>
+              <th class="num">盈亏比例</th>
+              <th class="num">日盈亏</th>
+              <th class="num">权重</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div id="holdings-empty" class="empty hidden">
+          <p>还没有持仓。在上方表单添加一只，或点击“载入示例”。</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel alerts-panel">
+      <div class="panel-head">
+        <div>
+          <h2>盘中告警</h2>
+          <p class="muted" id="alert-subtitle">实时行情触发 · 同一规则 30 分钟冷却</p>
+        </div>
+        <div class="toolbar">
+          <span id="alert-count" class="muted">0 条</span>
+          <button id="alert-clear" class="btn btn-ghost btn-small" type="button">清空</button>
+        </div>
+      </div>
+      <div id="alert-list" class="alert-list" aria-live="polite"></div>
+      <div id="alert-empty" class="empty">
+        <p>暂时没有触发告警。行情变化达到阈值时会在这里提示。</p>
+      </div>
+    </section>
+
+    <footer>
+      <p>数据来源：腾讯证券公开行情接口（可能延迟或中断）· 历史数据为前复权日线 · 仅供课程学习，不构成投资建议。</p>
+      <p>股迹 v0.5 · 本地运行，不上传持仓数据 · 行情为约 3 秒快照，非逐笔成交。</p>
+    </footer>
+  </div>
+
+  <script src="js/data/universe.js?v=0.5.0"></script>
+  <script src="js/data/snapshot.js?v=0.5.0"></script>
+  <script src="js/core/portfolio.js?v=0.5.0"></script>
+  <script src="js/core/storage.js?v=0.5.0"></script>
+  <script src="js/core/quote-state.js?v=0.5.0"></script>
+  <script src="js/core/freshness.js?v=0.5.0"></script>
+  <script src="js/core/alerts.js?v=0.5.0"></script>
+  <script src="js/core/indicators.js?v=0.5.0"></script>
+  <script src="js/core/signals.js?v=0.5.0"></script>
+  <script src="js/core/gates.js?v=0.5.0"></script>
+  <script src="js/core/overview.js?v=0.5.0"></script>
+  <script src="js/core/risk.js?v=0.5.0"></script>
+  <script src="js/core/forecast.js?v=0.5.0"></script>
+  <script src="js/data/history.js?v=0.5.0"></script>
+  <script src="js/data/provider.js?v=0.5.0"></script>
+  <script src="js/ui/minute-chart.js?v=0.5.0"></script>
+  <script src="js/ui/motion.js?v=0.5.0"></script>
+  <script src="js/ui/kline-chart.js?v=0.5.0"></script>
+  <script src="js/ui/share-card.js?v=0.5.0"></script>
+  <script src="js/ui/app.js?v=0.5.0"></script>
+</body>
+</html>
